@@ -1,0 +1,19 @@
+# 机器人听觉感知系统 — Python 依赖
+# 麦克风与识别：SpeechRecognition + PyAudio
+# macOS 若 pip 安装 PyAudio 失败，可先: brew install portaudio
+
+SpeechRecognition>=3.10.0
+PyAudio>=0.2.14
+
+# 3D 可视化界面（可选，但你需要 GUI 就请安装）
+PyQt6>=6.6.0
+pyqtgraph>=0.13.3
+PyOpenGL>=3.1.7
+
+# 千问（通义千问）API：DashScope SDK
+dashscope>=1.10.0
+
+# 本地官方声纹比对（PaddleSpeech ECAPA-TDNN）
+numpy>=1.24.0,<2.0
+paddlepaddle>=3.3.0
+paddlespeech>=1.5.0
