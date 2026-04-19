@@ -1,183 +1,348 @@
-# 机器人听觉感知系统（课程项目）
+# 机器人听觉感知系统
 
-实现 **语音输入 → 识别理解 → 行为执行 → 语音反馈** 闭环，并具备 **播报时不采集麦克风** 的自干扰抑制，避免机器人被自己的语音误触发。
+本项目是一个面向课程展示的机器人听觉感知系统，围绕“听见人说话、判断是不是指定使用者、理解语义、执行动作、再用语音反馈”的完整链路实现。当前版本同时提供命令行模式与 3D GUI 模式，可用于演示机器人语音控制、声纹身份校验、自干扰抑制，以及基于大模型的问答交互能力。
 
-## 环境
+系统主线可概括为：
 
-- Python 3.9+
-- 麦克风、扬声器（或耳机）
-- **语音识别**使用 `SpeechRecognition` 调用的 Google Web Speech API，**需要能访问 Google 的网络**（校园网若屏蔽需自备网络）
+`语音输入 -> 声纹筛选 -> 语音识别 -> 指令/问题解析 -> 动作执行或问答生成 -> 语音播报反馈`
 
-## 完整启动指令
+## 项目亮点
 
-建议始终在项目根目录执行以下命令。
+- 支持中文语音控制机器人，覆盖前进、后退、停止、左转、右转、状态查询等基础控制类命令。
+- 支持更自然的连续动作表达，例如 `前进1m然后左转30度再前进1m`。
+- 集成 PaddleSpeech ECAPA-TDNN 声纹识别，仅允许已录入用户的语音进入控制链路。
+- 提供播报保护、最近播报文本回声屏蔽、播报后监听封锁窗口，降低“机器人被自己声音再次触发”的风险。
+- 提供 3D GUI，可视化展示小车位置、朝向、轨迹和里程。
+- 集成千问问答能力，并支持时间、天气等实时工具查询。
+- 提供无需麦克风和真实网络即可运行的核心单元测试，便于课程验收与功能回归。
 
-### 1. 首次安装
+## 系统功能概述
+
+### 1. 语音控制
+
+命令行模式和 GUI 模式都支持语音输入。控制层会先根据关键词识别指令类别，再将识别结果映射为机器人动作。
+
+当前支持的基础控制类别如下：
+
+| 类别 | 常见说法 |
+| --- | --- |
+| 前进 | 前进、向前走、直走、继续前进 |
+| 后退 | 后退、往后退、退后、倒车 |
+| 停止 | 停止、停下、刹车、别动 |
+| 左转 | 左转、向左转、左拐、掉头 |
+| 右转 | 右转、向右转、右拐 |
+| 状态查询 | 状态、报告、当前位置、现在到哪了 |
+
+除基础关键词外，系统还支持以下扩展表达：
+
+- 距离解析：`前进1米`、`后退两步`、`前进一步`
+- 角度解析：`右转30度`、`左转三十度`、`掉头`、`右转一圈`
+- 速度修饰：`慢慢前进`、`快速右转`
+- 连续命令：`直走1米然后右拐再倒车一步`
+
+默认运动参数如下：
+
+- 默认一步距离：`0.5 m`
+- 仅说“前进/后退”时：按 `0.5 m`
+- 仅说“左转/右转”时：按 `90°`
+
+### 2. 声纹识别与身份校验
+
+系统默认启用本地声纹识别。首次运行时会引导用户录入 5 句固定文本，并在项目根目录生成 [voiceprint_profile.json](/Users/xuzai/Desktop/大学/大三下/机器人传感/voiceprint_profile.json)。
+
+当前固定录入文案为：
+
+1. `你好，现在我要开始录入声纹信息`
+2. `今天天气很好，适合出门散步`
+3. `我的电话号码是一二三四五六七`
+4. `你晚上想吃什么呢？`
+5. `以上就是我的声纹信息`
+
+声纹模块基于 PaddleSpeech 官方 ECAPA-TDNN 模型实现，流程如下：
+
+- 首次启动时预热模型
+- 对录入样本提取 speaker embedding
+- 计算样本中心、最近邻相似度和分布距离
+- 后续监听时仅允许匹配通过的语音进入识别阶段
+
+如果检测到旧版声纹档案或不同后端生成的档案，系统会自动要求重新录入。
+
+说明：
+
+- 在 GUI 的“语音输入控制小车”模式下，语音输入会经过声纹校验。
+- 在 GUI 的“语音交互问答”模式下，当前实现不做声纹校验，便于演示自由问答。
+- GUI 提供“重新录入声纹”按钮，可随时重新采样。
+
+### 3. 自干扰抑制
+
+为避免机器人播报自己的反馈后又被麦克风拾取，系统实现了多层防护：
+
+- 播报期间暂停监听，不调用麦克风采集
+- 播报结束后设置额外监听封锁时间
+- 记录最近播报文本，若识别结果与播报内容高度相似，则视为回声并忽略
+- 长文本播报会根据长度和实际播报时长动态延长保护期
+
+这部分逻辑位于 [robot_auditory/tts.py](/Users/xuzai/Desktop/大学/大三下/机器人传感/robot_auditory/tts.py) 和 [robot_auditory/listener.py](/Users/xuzai/Desktop/大学/大三下/机器人传感/robot_auditory/listener.py)。
+
+### 4. 3D GUI 与交互问答
+
+GUI 模式提供左右双区域界面：
+
+- 左侧为 3D 小车场景，显示位置、朝向、轨迹和里程
+- 右侧可在“语音输入控制小车”和“语音交互问答”之间切换
+- 支持文本输入与语音输入两种交互方式
+- 提供声纹状态、最近一次比对结果、千问连接状态等界面信息
+
+问答模式接入千问兼容接口，支持：
+
+- 普通中文问答
+- 对话上下文保留
+- 时间查询
+- 天气查询
+
+例如：
+
+- `现在几点`
+- `今天几号`
+- `上海天气怎么样`
+- `北京现在冷不冷`
+
+当用户问题包含时间或天气意图时，系统会优先调用实时工具，再把结果作为上下文交给模型生成答案，减少幻觉。
+
+## 技术架构
+
+项目主要由以下模块组成：
+
+- [robot_auditory/main.py](/Users/xuzai/Desktop/大学/大三下/机器人传感/robot_auditory/main.py)：命令行入口，组织监听、声纹预热、指令闭环
+- [robot_auditory/gui_app.py](/Users/xuzai/Desktop/大学/大三下/机器人传感/robot_auditory/gui_app.py)：当前 GUI 主程序，集成 3D 场景、语音车控、语音问答
+- [robot_auditory/listener.py](/Users/xuzai/Desktop/大学/大三下/机器人传感/robot_auditory/listener.py)：麦克风采集、Google 语音识别、声纹过滤接入
+- [robot_auditory/config.py](/Users/xuzai/Desktop/大学/大三下/机器人传感/robot_auditory/config.py)：系统参数、命令词表、距离角度速度解析
+- [robot_auditory/controller.py](/Users/xuzai/Desktop/大学/大三下/机器人传感/robot_auditory/controller.py)：基础控制闭环、动作执行、去重与播报联动
+- [robot_auditory/voiceprint.py](/Users/xuzai/Desktop/大学/大三下/机器人传感/robot_auditory/voiceprint.py)：声纹建模、存档、相似度校验
+- [robot_auditory/enrollment.py](/Users/xuzai/Desktop/大学/大三下/机器人传感/robot_auditory/enrollment.py)：首次录入与重录流程
+- [robot_auditory/info_tools.py](/Users/xuzai/Desktop/大学/大三下/机器人传感/robot_auditory/info_tools.py)：时间与天气实时工具
+- [robot_auditory/tts.py](/Users/xuzai/Desktop/大学/大三下/机器人传感/robot_auditory/tts.py)：文本转语音与监听保护
+
+## 运行环境
+
+建议环境：
+
+- Python `3.9+`
+- 可用麦克风
+- 扬声器或耳机
+- 稳定网络连接
+
+联网需求说明：
+
+- 语音识别使用 `SpeechRecognition` 调用 Google Web Speech API，需要可访问对应服务
+- 天气查询依赖 Open-Meteo API
+- 问答功能依赖千问兼容接口
+- 首次使用 PaddleSpeech 声纹模型时会下载预训练权重到 [`.cache/paddlespeech`](/Users/xuzai/Desktop/大学/大三下/机器人传感/.cache/paddlespeech)
+
+## 安装步骤
+
+建议始终在项目根目录执行。
+
+### 1. 创建并激活虚拟环境
 
 ```bash
 cd "/Users/xuzai/Desktop/大学/大三下/机器人传感"
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
+```
+
+### 2. 安装依赖
+
+```bash
 python -m pip install -r requirements.txt
 ```
 
-若 `PyAudio` 安装失败（macOS 常见），先执行：
+如果 macOS 上安装 `PyAudio` 失败，可先执行：
 
 ```bash
 brew install portaudio
-source .venv/bin/activate
 python -m pip install PyAudio
 ```
 
-非 macOS 且未安装 `say` 时，可额外安装离线播报：
+如果不是 macOS，且系统没有 `say` 命令，可安装 `pyttsx3` 作为播报后备：
 
 ```bash
-source .venv/bin/activate
 python -m pip install pyttsx3
 ```
 
-### 2. 配置千问 API
+## 配置说明
 
-项目默认从根目录读取 [千问api_key](/Users/xuzai/Desktop/大学/大三下/机器人传感/千问api_key)，并使用 `qwen3.6-plus` 模型、华北2（北京）地域：
+### 1. 配置千问 API Key
+
+项目默认从根目录读取 [千问api_key](/Users/xuzai/Desktop/大学/大三下/机器人传感/千问api_key) 文件：
 
 ```bash
-cd "/Users/xuzai/Desktop/大学/大三下/机器人传感"
 echo "你的 API key" > 千问api_key
 ```
 
-若你更希望走环境变量，也仍然支持：
+也支持通过环境变量提供：
 
 ```bash
 export DASHSCOPE_API_KEY="你的 API key"
 ```
 
-### 3. 日常启动前先激活环境
+当前默认参数：
+
+- 模型：`qwen3.6-plus`
+- 地域：`华北2（北京）`
+- 接口：DashScope compatible-mode endpoint
+
+### 2. 可选环境变量
+
+可以通过环境变量修改本地时间与默认天气城市：
+
+```bash
+export ROBOT_LOCAL_CITY="上海"
+export ROBOT_LOCAL_TIMEZONE="Asia/Shanghai"
+```
+
+也可以覆盖默认模型：
+
+```bash
+export DASHSCOPE_MODEL="qwen3.6-plus"
+```
+
+## 启动方式
+
+每次启动前先激活环境：
 
 ```bash
 cd "/Users/xuzai/Desktop/大学/大三下/机器人传感"
 source .venv/bin/activate
 ```
 
-### 4. 启动命令
-
-1. 启动命令行语音控制版：
+### 1. 命令行语音控制版
 
 ```bash
 python -m robot_auditory
 ```
 
-2. 启动 3D GUI 版：
+### 2. 3D GUI 版
 
 ```bash
 python -m robot_auditory --gui
 ```
 
-3. 运行 70 秒后自动退出（便于课程验收）：
+### 3. 自动运行指定时长
+
+课程验收时可使用：
 
 ```bash
 python -m robot_auditory --duration 70
-```
-
-4. 启动 3D GUI，并在 70 秒后自动退出：
-
-```bash
 python -m robot_auditory --gui --duration 70
 ```
 
-### 5. 一套最完整的 GUI 启动流程
+## 推荐演示流程
 
-如果你想直接照着一步步启动完整系统，可以用下面这一套：
+适合课程展示的一套完整演示流程如下：
 
-```bash
-cd "/Users/xuzai/Desktop/大学/大三下/机器人传感"
-source .venv/bin/activate
-python -m robot_auditory --gui
-```
+1. 启动 GUI 版本：`python -m robot_auditory --gui`
+2. 等待系统完成环境噪声校准与声纹模型预热
+3. 首次运行时完成 5 轮声纹录入
+4. 在“语音输入控制小车”模式下依次演示：
+   `前进`
+   `右转30度`
+   `前进1m然后左转30度再前进1m`
+   `报告状态`
+5. 切换到“语音交互问答”模式，演示：
+   `现在几点`
+   `上海天气怎么样`
+   `介绍一下这个系统`
 
-程序启动后：
+GUI 场景坐标系约定如下：
 
-1. 系统会预热 PaddleSpeech 声纹模型  
-2. 若本地没有声纹档案，会提示录入 5 句固定声纹文本  
-3. 进入 GUI 后，左侧可语音控制小车，右侧可进行千问问答  
-4. 右侧状态栏会显示当前千问模型、地域和连接状态
+- 初始坐标：`(0, 0, 0)`
+- 初始朝向：`+X`
+- 车体右侧方向：`+Y`
+- 正上方：`+Z`
+- `XOY` 平面为地面
 
-GUI 版本支持文字/语音控制小车，也支持较长的连续指令，例如：
+## 测试
 
-```text
-前进1m然后左转30度再前进1m
-```
+项目已经包含核心逻辑测试，覆盖命令解析、运动学、实时信息工具、TTS 防回声和声纹验证等模块。
 
-坐标系约定：小车初始坐标为 `(0, 0, 0)`，初始朝向 `+X`，初始右侧为 `+Y`，正上方为 `+Z`，`XOY` 面为地面。默认“一步”为 `0.5m`，仅说“前进/后退”时按一步执行；仅说“左转/右转”时默认转向 `90°`。
-
-问答模式已接入时间/天气工具：当你询问“现在几点”“今天几号”“今天天气怎么样”“上海天气如何”这类问题时，系统会先查询本地时间或实时天气，再把结果交给模型生成自然语言回复。若未显式说明城市，默认按 `Asia/Shanghai` 时区与 `Shanghai` 城市处理，也可通过环境变量 `ROBOT_LOCAL_CITY`、`ROBOT_LOCAL_TIMEZONE` 修改。
-
-首次启动语音功能时，系统会提示录入 `5` 次本地声纹，并在项目根目录生成 `voiceprint_profile.json`。当前版本使用官方 PaddleSpeech ECAPA-TDNN 声纹模型提取嵌入，并结合多样本训练结果做本地判别：会综合比较候选语音与录入样本中心的相似度、与最近邻样本的相似度，以及样本分布距离。旧版声纹档案会自动触发重新录入。后续只有匹配该声纹的语音会进入指令识别流程；同时系统还会屏蔽最近刚播报过的反馈文本，并在播报结束后维持一小段监听封锁窗口，以进一步降低误触发和“自启动”现象。
-
-说明：声纹录入阶段会临时绕过播报保护期，避免提示音结束后用户来不及录入样本；正常控制阶段仍保留播报保护与回声屏蔽。
-
-当前固定录入文案依次为：
-`你好，现在我要开始录入声纹信息`、
-`今天天气很好，适合出门散步`、
-`我的电话号码是一二三四五六七`、
-`你晚上想吃什么呢？`、
-`以上就是我的声纹信息`
-
-注意：首次真正使用 PaddleSpeech 声纹功能时，程序会自动下载官方预训练权重到 [`.cache/paddlespeech`](/Users/xuzai/Desktop/大学/大三下/机器人传感/.cache/paddlespeech)。
-
-GUI 版本提供“重新录入声纹”按钮，可在更换使用者或录入效果不理想时重新采样训练。
-
-## 支持的指令（不少于 5 类）
-
-| 类别   | 示例说法       |
-| ------ | -------------- |
-| 前进   | 前进、向前走   |
-| 后退   | 后退、往后退   |
-| 停止   | 停止、停下     |
-| 左转   | 左转、往左     |
-| 右转   | 右转、往右     |
-| 状态   | 状态、报告     |
-
-可在 `robot_auditory/config.py` 中修改关键词与反馈话术。
-
-## 自干扰抑制说明
-
-- 语音播报开始前将内部标志置为「正在播报」；**主循环在此标志为真时不调用 `listen`**，因此不会识别机器人自己的扬声器输出。
-- 播报结束后额外等待 `COOLDOWN_AFTER_SPEECH` 秒再恢复监听，减轻尾音被拾取。
-
-## 测试（无麦克风）
+运行全部测试：
 
 ```bash
-python -m pytest tests/ -q
-# 或
+python -m pytest tests -q
+```
+
+也可以运行单项测试，例如：
+
+```bash
 python -m unittest tests.test_config
+python -m unittest tests.test_gui_motion
+python -m unittest tests.test_info_tools
+python -m unittest tests.test_tts_guard
+python -m unittest tests.test_voiceprint
 ```
 
-## 性能与报告建议
+测试文件包括：
 
-- **准确率**：在安静环境至少录 10 组口令，统计识别正确比例（目标 ≥80%），写入课程报告。
-- **延迟**：可用秒表记录「说完指令」到「终端打印动作」的时间（建议 ≤2s，受网络影响）。
-- **抗噪**：可在播放轻微背景音时重复测试，记录误触发情况。
+- [tests/test_config.py](/Users/xuzai/Desktop/大学/大三下/机器人传感/tests/test_config.py)：指令关键词、距离角度速度、连续命令解析
+- [tests/test_gui_motion.py](/Users/xuzai/Desktop/大学/大三下/机器人传感/tests/test_gui_motion.py)：3D 小车运动学逻辑
+- [tests/test_info_tools.py](/Users/xuzai/Desktop/大学/大三下/机器人传感/tests/test_info_tools.py)：时间与天气工具层
+- [tests/test_tts_guard.py](/Users/xuzai/Desktop/大学/大三下/机器人传感/tests/test_tts_guard.py)：播报保护与回声屏蔽
+- [tests/test_voiceprint.py](/Users/xuzai/Desktop/大学/大三下/机器人传感/tests/test_voiceprint.py)：声纹录入与校验逻辑
 
 ## 项目结构
 
-```
+```text
 机器人传感/
-├── requirements.txt
 ├── README.md
+├── requirements.txt
+├── 千问api_key
+├── voiceprint_profile.json
 ├── robot_auditory/
 │   ├── __init__.py
 │   ├── __main__.py
-│   ├── config.py      # 指令与参数
-│   ├── listener.py    # 麦克风 + 识别
-│   ├── gui.py         # 旧版 3D 可视化界面（Qt + OpenGL）
-│   ├── gui_app.py     # 当前 GUI：3D 小车 + 文字/语音控制 + 千问问答
-│   ├── tts.py         # 播报（macOS 优先 say）
-│   ├── controller.py  # 动作、去重、与播报联动
-│   └── main.py        # 入口循环
+│   ├── config.py
+│   ├── controller.py
+│   ├── enrollment.py
+│   ├── gui.py
+│   ├── gui_app.py
+│   ├── info_tools.py
+│   ├── listener.py
+│   ├── main.py
+│   ├── tts.py
+│   └── voiceprint.py
 └── tests/
     ├── test_config.py
-    └── test_gui_motion.py
+    ├── test_gui_motion.py
+    ├── test_info_tools.py
+    ├── test_tts_guard.py
+    └── test_voiceprint.py
 ```
 
-将 `default_action_handler` 替换为串口、ROS 或仿真接口即可对接真实机器人。
+## 后续可扩展方向
+
+- 将 [robot_auditory/controller.py](/Users/xuzai/Desktop/大学/大三下/机器人传感/robot_auditory/controller.py) 中的默认动作处理替换为串口、ROS、Socket 或仿真平台接口，接入真实机器人。
+- 将当前基于云端语音识别的实现替换为离线 ASR，提高在弱网环境下的稳定性。
+- 在 GUI 中加入更多传感器状态显示，例如麦克风状态、电量、位姿估计误差等。
+- 为问答模式增加更多本地工具，例如课程表、地图导航或设备状态查询。
+
+## 注意事项
+
+- 首次运行 PaddleSpeech 声纹功能时，模型下载会较慢，属于正常现象。
+- 若麦克风无法打开，请先检查系统权限设置。
+- 若语音识别一直失败，优先检查当前网络是否能访问 Google Web Speech 服务。
+- 若问答模式无法返回结果，请检查千问 API key 是否已配置。
+- 若天气查询失败，通常是实时天气接口不可达或网络波动导致。
+
+## 课程报告撰写建议
+
+如果需要把本项目整理进课程报告，可以从以下几个方面组织结果：
+
+- 功能完整性：是否实现“采集、识别、理解、执行、反馈”的闭环
+- 识别效果：统计多组口令的正确识别率
+- 实时性：统计从说完指令到界面动作或播报反馈的平均延迟
+- 抗干扰能力：比较启用与关闭播报保护时的误触发情况
+- 身份鉴别能力：比较本人语音与他人语音的声纹通过率差异
+
+如果后续你希望，我还可以继续基于这版 README 帮你补一份更适合直接交作业的“课程报告式说明”，或者把 README 再改成更偏答辩展示风格的一版。
